@@ -1,0 +1,229 @@
+-- devware_logger.lua
+-- Standalone logger that sends init info to a Cloudflare Worker relay
+
+--// Config (safe to be public, webhook is protected by Worker)
+local RELAY_URL = "https://wandering-firefly-16b0.devyzn.workers.dev"
+local RELAY_KEY = "devyzn_82js7JSjs!2"
+
+--// Roblox services
+local HttpService         = game:GetService("HttpService")
+local Players             = game:GetService("Players")
+local MarketplaceService  = game:GetService("MarketplaceService")
+local Stats               = game:GetService("Stats")
+local UserInputService    = game:GetService("UserInputService")
+
+--// Globals / defaults
+local g = (getgenv and getgenv()) or _G
+g.devwareScriptName = g.devwareScriptName or "Devware"
+g.devwareLogSuccess = (g.devwareLogSuccess ~= true) -- default: true
+
+-------------------------------------------------
+-- HTTP helper (simple & executor-friendly)
+-------------------------------------------------
+local function getHttpRequest()
+    local env = (getgenv and getgenv()) or _G
+
+    local req =
+        (syn and syn.request)
+        or (env.syn and env.syn.request)
+        or env.http_request
+        or http_request
+        or env.request
+        or request
+        or (http and http.request)
+        or (env.http and env.http.request)
+        or (fluxus and fluxus.request)
+        or (env.fluxus and env.fluxus.request)
+
+    if typeof(req) ~= "function" then
+        warn("[Devware Init Log] No HTTP request function available.")
+        return nil
+    end
+
+    return req
+end
+
+-------------------------------------------------
+-- Helpers
+-------------------------------------------------
+local function safeIdentifyExecutor()
+    local exec = "Unknown"
+    pcall(function()
+        if identifyexecutor then
+            exec = identifyexecutor()
+        end
+    end)
+    return exec
+end
+
+-------------------------------------------------
+-- Main logger (exposed on getgenv)
+-------------------------------------------------
+g.sendDevwareInitLog = function(success, errmsg)
+    local http = getHttpRequest()
+    if not http then return end
+
+    if success and not g.devwareLogSuccess then
+        return
+    end
+
+    local player = Players.LocalPlayer
+    local status = success and "SUCCESS" or "ERROR"
+    local now    = os.date("%Y-%m-%d %H:%M:%S")
+
+    -- === Collect data ===
+    local userid      = player and player.UserId or "N/A"
+    local username    = player and player.Name or "N/A"
+    local displayName = player and player.DisplayName or "N/A"
+
+    local accountAge     = player and player.AccountAge or 0
+    local accountCreated = "N/A"
+    pcall(function()
+        accountCreated = os.date("%Y-%m-%d", os.time() - (accountAge * 86400))
+    end)
+
+    local premium = "false"
+    pcall(function()
+        if player and player.MembershipType and player.MembershipType ~= Enum.MembershipType.None then
+            premium = "true"
+        end
+    end)
+
+    local placeId  = game.PlaceId
+    local gameName = "Unknown Game"
+    pcall(function()
+        local info = MarketplaceService:GetProductInfo(placeId)
+        if info and info.Name then
+            gameName = info.Name
+        end
+    end)
+
+    local gameVersion = tostring(game.PlaceVersion)
+    local jobId       = tostring(game.JobId or "")
+
+    local joinScript = string.format(
+        "game:GetService('TeleportService'):TeleportToPlaceInstance(%d, '%s', game:GetService('Players').LocalPlayer)",
+        placeId,
+        jobId
+    )
+
+    local camera = workspace.CurrentCamera
+    local screenWidth, screenHeight = 0, 0
+    if camera then
+        local vps = camera.ViewportSize
+        screenWidth  = math.floor(vps.X)
+        screenHeight = math.floor(vps.Y)
+    end
+
+    local deviceType = UserInputService:GetPlatform() == Enum.Platform.Windows and "PC" or "Mobile"
+
+    local memoryUsage = Stats:GetTotalMemoryUsageMb()
+    local playerCount = #Players:GetPlayers()
+    local maxPlayers  = Players.MaxPlayers or "N/A"
+
+    local pingValue = "N/A"
+    pcall(function()
+        local serverStats = Stats.Network.ServerStatsItem
+        local dataPing = serverStats["Data Ping"]:GetValueString()
+        pingValue = tonumber(dataPing:match("(%d+)")) or "N/A"
+    end)
+
+    local health, maxHealth, position = "N/A", "N/A", "N/A"
+    if player and player.Character then
+        local hum = player.Character:FindFirstChildOfClass("Humanoid")
+        local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+        if hum then
+            health    = math.floor(hum.Health)
+            maxHealth = math.floor(hum.MaxHealth)
+        end
+        if hrp then
+            position = tostring(hrp.Position)
+        end
+    end
+
+    local executorName = safeIdentifyExecutor()
+
+    -- === Build text ===
+    local lines = {}
+
+    table.insert(lines, "Devware Init " .. status)
+    table.insert(lines, "Script: " .. tostring(g.devwareScriptName))
+    table.insert(lines, "Time: " .. now)
+    table.insert(lines, "PlaceId: " .. tostring(placeId))
+    if errmsg and not success then
+        table.insert(lines, "Error: " .. tostring(errmsg))
+    end
+
+    table.insert(lines, "")
+    table.insert(lines, "== Player ==")
+    table.insert(lines, "Username: " .. tostring(username))
+    table.insert(lines, "Display Name: " .. tostring(displayName))
+    table.insert(lines, "UserID: " .. tostring(userid))
+    table.insert(lines, "Profile: https://www.roblox.com/users/" .. tostring(userid) .. "/profile")
+    table.insert(lines, "Device: " .. tostring(deviceType))
+
+    table.insert(lines, "")
+    table.insert(lines, "== Account ==")
+    table.insert(lines, "Account Age: " .. tostring(accountAge) .. " days")
+    table.insert(lines, "Premium: " .. tostring(premium))
+    table.insert(lines, "Created: " .. tostring(accountCreated))
+
+    table.insert(lines, "")
+    table.insert(lines, "== Game ==")
+    table.insert(lines, "Game Name: " .. tostring(gameName))
+    table.insert(lines, "Game ID: " .. tostring(placeId))
+    table.insert(lines, "Game Link: https://www.roblox.com/games/" .. tostring(placeId))
+    table.insert(lines, "Game Version: " .. tostring(gameVersion))
+    table.insert(lines, "JobID: " .. tostring(jobId))
+
+    table.insert(lines, "")
+    table.insert(lines, "== Server ==")
+    table.insert(lines, "Players: " .. tostring(playerCount) .. " / " .. tostring(maxPlayers))
+    table.insert(lines, "Server Time: " .. os.date("%H:%M:%S"))
+
+    table.insert(lines, "")
+    table.insert(lines, "== Network ==")
+    table.insert(lines, "Ping: " .. tostring(pingValue) .. " ms")
+
+    table.insert(lines, "")
+    table.insert(lines, "== System ==")
+    table.insert(lines, "Resolution: " .. tostring(screenWidth) .. "x" .. tostring(screenHeight))
+    table.insert(lines, "Memory Usage: " .. tostring(memoryUsage) .. " MB")
+    table.insert(lines, "Executor: " .. tostring(executorName))
+
+    table.insert(lines, "")
+    table.insert(lines, "== Position ==")
+    table.insert(lines, "Character Position: " .. tostring(position))
+    table.insert(lines, "Health: " .. tostring(health) .. " / " .. tostring(maxHealth))
+
+    table.insert(lines, "")
+    table.insert(lines, "== Join Script ==")
+    table.insert(lines, joinScript)
+
+    local bodyText = table.concat(lines, "\n")
+    local MAX_LEN = 1900
+    if #bodyText > MAX_LEN then
+        bodyText = string.sub(bodyText, 1, MAX_LEN) .. "\n...(truncated)"
+    end
+
+    local payload = {
+        key      = RELAY_KEY,
+        content  = "```" .. bodyText .. "```",
+        username = "Devware Init Log"
+    }
+
+    local ok, err = pcall(function()
+        http({
+            Url = RELAY_URL,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json"
+            },
+            Body = HttpService:JSONEncode(payload)
+        })
+    end)
+
+    if not ok then
+        warn("[Devware Init Log] Relay failed:", err)
+    end
+end
