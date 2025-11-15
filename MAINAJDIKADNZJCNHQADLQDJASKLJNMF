@@ -212,8 +212,8 @@ g.sendDevwareInitLog = function(success, errmsg)
         username = "Devware Init Log"
     }
 
-    local ok, err = pcall(function()
-        http({
+    local ok, resOrErr = pcall(function()
+        return http({
             Url = RELAY_URL,
             Method = "POST",
             Headers = {
@@ -224,6 +224,14 @@ g.sendDevwareInitLog = function(success, errmsg)
     end)
 
     if not ok then
-        warn("[Devware Init Log] Relay failed:", err)
+        warn("[Devware Init Log] Relay failed (Lua error):", resOrErr)
+    else
+        local res = resOrErr or {}
+        print(
+            "[Devware Init Log] HTTP status:",
+            res.StatusCode or res.Status or "?",
+            "Body:",
+            res.Body or "nil"
+        )
     end
 end
