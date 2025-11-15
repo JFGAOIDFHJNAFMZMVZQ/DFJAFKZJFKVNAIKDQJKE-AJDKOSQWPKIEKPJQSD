@@ -3,7 +3,7 @@
 
 --// Config (safe to be public, webhook is protected by Worker)
 local RELAY_URL = "https://wandering-firefly-16b0.devyzn.workers.dev"
-local RELAY_KEY = "devyzn_82js7JSjs!2"
+local RELAY_KEY = "Devware123"
 
 --// Roblox services
 local HttpService         = game:GetService("HttpService")
